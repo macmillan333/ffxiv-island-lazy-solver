@@ -72,6 +72,7 @@ class ExpeditionArea
     public string terrain;
     public List<Item> resources;
     public Item rareResources;
+    public int expectedQuantityPerMaterialPerWeek;
 
     public ExpeditionArea(string terrain, Item rareResources)
     {
@@ -83,13 +84,22 @@ class ExpeditionArea
 
 class Program
 {
-    static void Main(string[] args)
-    {
-        const string kItemsFilename = "../../../Items.csv";
-        const string kGranaryFilename = "../../../Granary.csv";
-        const string kHandicraftFilename = "../../../Handicraft.csv";
+    // File locations
+    const string kItemsFilename = "../../../Items.csv";
+    const string kGranaryFilename = "../../../Granary.csv";
+    const string kHandicraftFilename = "../../../Handicraft.csv";
 
-        Dictionary<string, Item> items = new Dictionary<string, Item>();
+    // Parameters
+    const int kGranaryLevel = 4;
+    const int kNumLandmarks = 4;
+    const int kMaterialsBaseValue = 9;  // 64.34% to be 9+, 46.84% to be 10+
+
+    Dictionary<string, Item> items = new Dictionary<string, Item>();
+    List<ExpeditionArea> areas = new List<ExpeditionArea>();
+    List<Handicraft> handicrafts = new List<Handicraft>();
+
+    private void LoadData()
+    {
         using (var streamReader = new StreamReader(kItemsFilename))
         {
             CsvReader reader = new CsvReader(streamReader, ",");
@@ -102,7 +112,6 @@ class Program
             }
         }
 
-        List<ExpeditionArea> areas = new List<ExpeditionArea>();
         using (var streamReader = new
             StreamReader(kGranaryFilename))
         {
@@ -122,7 +131,6 @@ class Program
             }
         }
 
-        List<Handicraft> handicrafts = new List<Handicraft>();
         using (var streamReader = new
             StreamReader(kHandicraftFilename))
         {
@@ -151,5 +159,87 @@ class Program
                 handicrafts.Add(craft);
             }
         }
+
+        const int kMaterialsPerGranaryPerWeek = (kMaterialsBaseValue + kNumLandmarks) * 2 * 7;
+        foreach (ExpeditionArea a in areas)
+        {
+            a.expectedQuantityPerMaterialPerWeek = kMaterialsPerGranaryPerWeek / a.resources.Count;
+        }
+    }
+
+    private void SolveForInventory(Dictionary<Item, int> inventory)
+    {
+        // Find the craftable things
+        List<Handicraft> craftables = new List<Handicraft>();
+        foreach (Handicraft c in handicrafts)
+        {
+            bool craftable = true;
+            foreach (Handicraft.Ingredient i in c.ingredients)
+            {
+                switch (i.item.type)
+                {
+                    case Item.Type.GardeningStarter:
+                    case Item.Type.Leavings:
+                    case Item.Type.Produce:
+                        // For simplicity we assume we have infinite of those
+                        break;
+                    case Item.Type.RareMaterial:
+                    case Item.Type.Material:
+                        if (!inventory.ContainsKey(i.item) ||
+                            inventory[i.item] < i.quantity)
+                        {
+                            craftable = false;
+                            break;
+                        }
+                        break;
+                }
+            }
+            if (craftable)
+            {
+                craftables.Add(c);
+            }
+        }
+
+        Console.WriteLine($"{craftables.Count} out of {handicrafts.Count} are craftable.");
+    }
+
+    private void InstanceMain()
+    {
+        LoadData();
+
+        // Start picking granary expeditions
+        const int kRareMaterialsPerGranaryPerWeek = (kGranaryLevel + 1) * 7;
+        for (int choice1 = 0; choice1 < areas.Count; choice1++)
+        {
+            for (int choice2 = choice1; choice2 < areas.Count; choice2++)
+            {
+                ExpeditionArea area1 = areas[choice1];
+                ExpeditionArea area2 = areas[choice2];
+
+                // Build inventory
+                Dictionary<Item, int> inventory = new Dictionary<Item, int>();
+                inventory.TryAdd(area1.rareResources, 0);
+                inventory[area1.rareResources] += kRareMaterialsPerGranaryPerWeek;
+                inventory.TryAdd(area2.rareResources, 0);
+                inventory[area2.rareResources] += kRareMaterialsPerGranaryPerWeek;
+                foreach (Item i in area1.resources)
+                {
+                    inventory.TryAdd(i, 0);
+                    inventory[i] += area1.expectedQuantityPerMaterialPerWeek;
+                }
+                foreach (Item i in area2.resources)
+                {
+                    inventory.TryAdd(i, 0);
+                    inventory[i] += area2.expectedQuantityPerMaterialPerWeek;
+                }
+
+                SolveForInventory(inventory);
+            }
+        }
+    }
+
+    static void Main(string[] args)
+    {
+        new Program().InstanceMain();
     }
 }
