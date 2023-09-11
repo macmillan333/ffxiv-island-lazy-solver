@@ -64,7 +64,12 @@ class Handicraft
     {
         this.name = name;
         this.ingredients = new List<Ingredient>();
+        totalLeavingNeeded = 0;
+        totalProduceNeeded = 0;
     }
+
+    public int totalLeavingNeeded;
+    public int totalProduceNeeded;
 }
 
 class ExpeditionArea
@@ -72,6 +77,7 @@ class ExpeditionArea
     public string terrain;
     public List<Item> resources;
     public Item rareResources;
+    public int quantityPerRareMaterialPerWeek;
     public int expectedQuantityPerMaterialPerWeek;
 
     public ExpeditionArea(string terrain, Item rareResources)
@@ -79,6 +85,165 @@ class ExpeditionArea
         this.terrain = terrain;
         this.resources = new List<Item>();
         this.rareResources = rareResources;
+    }
+}
+
+class Inventory
+{
+    private Dictionary<Item, int> content;
+    private int leavingQuantity;
+    private int produceQuantity;
+
+    public Inventory(ExpeditionArea area1, ExpeditionArea area2)
+    {
+        content = new Dictionary<Item, int>();
+        content.TryAdd(area1.rareResources, 0);
+        content[area1.rareResources] += area1.quantityPerRareMaterialPerWeek;
+        content.TryAdd(area2.rareResources, 0);
+        content[area2.rareResources] += area2.quantityPerRareMaterialPerWeek;
+        foreach (Item i in area1.resources)
+        {
+            content.TryAdd(i, 0);
+            content[i] += area1.expectedQuantityPerMaterialPerWeek;
+        }
+        foreach (Item i in area2.resources)
+        {
+            content.TryAdd(i, 0);
+            content[i] += area2.expectedQuantityPerMaterialPerWeek;
+        }
+
+        leavingQuantity = Program.kTotalLeavingPerWeek;
+        produceQuantity = Program.kProduceAvailableForCraftPerWeek;
+    }
+
+    public bool CanCraft(Handicraft craft)
+    {
+        if (leavingQuantity < craft.totalLeavingNeeded) return false;
+        if (produceQuantity < craft.totalProduceNeeded) return false;
+        foreach (Handicraft.Ingredient i in craft.ingredients)
+        {
+            switch (i.item.type)
+            {
+                case Item.Type.GardeningStarter:
+                    // Don't care
+                case Item.Type.Leavings:
+                case Item.Type.Produce:
+                    // Already checked
+                    break;
+                case Item.Type.RareMaterial:
+                case Item.Type.Material:
+                    if (!content.ContainsKey(i.item) ||
+                        content[i.item] < i.quantity)
+                    {
+                        return false;
+                    }
+                    break;
+            }
+        }
+        return true;
+    }
+
+    public void Craft(Handicraft craft)
+    {
+        foreach (Handicraft.Ingredient i in craft.ingredients)
+        {
+            switch (i.item.type)
+            {
+                case Item.Type.GardeningStarter:
+                    // Don't care
+                    break;
+                case Item.Type.Leavings:
+                    leavingQuantity -= i.quantity;
+                    break;
+                case Item.Type.Produce:
+                    produceQuantity -= i.quantity;
+                    break;
+                case Item.Type.RareMaterial:
+                case Item.Type.Material:
+                    content[i.item] -= i.quantity;
+                    break;
+            }
+        }
+    }
+
+    public void Uncraft(Handicraft craft)
+    {
+        foreach (Handicraft.Ingredient i in craft.ingredients)
+        {
+            switch (i.item.type)
+            {
+                case Item.Type.GardeningStarter:
+                    // Don't care
+                    break;
+                case Item.Type.Leavings:
+                    leavingQuantity += i.quantity;
+                    break;
+                case Item.Type.Produce:
+                    produceQuantity += i.quantity;
+                    break;
+                case Item.Type.RareMaterial:
+                case Item.Type.Material:
+                    content[i.item] += i.quantity;
+                    break;
+            }
+        }
+    }
+}
+
+class DayPlan
+{
+    List<Handicraft> content;
+    public int totalTime;
+
+    public DayPlan()
+    {
+        content = new List<Handicraft>();
+        totalTime = 0;
+    }
+
+    public bool CanAdd(Handicraft craft)
+    {
+        return totalTime + craft.time <= 24;
+    }
+    public void Add(Handicraft craft)
+    {
+        content.Add(craft);
+        totalTime += craft.time;
+    }
+    public void RemoveLast()
+    {
+        Handicraft last = content[content.Count - 1];
+        totalTime -= last.time;
+        content.RemoveAt(content.Count - 1);
+    }
+
+    public int TotalValue()
+    {
+        if (content.Count == 0) return 0;
+        int value = content[0].value;
+        for (int i = 1; i < content.Count; i++)
+        {
+            int multiplier = 1;
+
+            // Is there a common category with the previous item?
+            // Note that category2 may be None
+            Handicraft prev = content[i - 1];
+            Handicraft curr = content[i];
+            if (prev.category1 == curr.category1 ||
+                prev.category1 == curr.category2 ||
+                prev.category2 == curr.category1)
+            {
+                multiplier = 2;
+            }
+            else if (prev.category2 == curr.category2 &&
+                prev.category2 != Handicraft.Category.None)
+            {
+                multiplier = 2;
+            }
+
+            value += multiplier * content[i].value;
+        }
+        return value;
     }
 }
 
@@ -93,6 +258,22 @@ class Program
     const int kGranaryLevel = 4;
     const int kNumLandmarks = 4;
     const int kMaterialsBaseValue = 9;  // 64.34% to be 9+, 46.84% to be 10+
+    const int kCroplandPlots = 20;
+    const int kPastureSlots = 20;
+
+    // Derived parameters on cropland and pasture
+    const int kCroplandTotalYieldPerWeek = kCroplandPlots
+        * 7 / 2  // 1 harvest every 2 days
+        * 5;  // 5 yield per harvest
+    const int kProduceUsedForFeedPerWeek = kPastureSlots
+        * 7  // 1 feed per day
+        * 2 / 3  // 3 crops craft into 2 feeds
+        + 2;  // compensation for integer division
+    public const int kProduceAvailableForCraftPerWeek = 
+        kCroplandTotalYieldPerWeek - kProduceUsedForFeedPerWeek;
+    public const int kTotalLeavingPerWeek = kPastureSlots
+        * 7  // 1 drop chance per day
+        * 3 / 2;  // 1 normal + 50% chance bonus drop
 
     Dictionary<string, Item> items = new Dictionary<string, Item>();
     List<ExpeditionArea> areas = new List<ExpeditionArea>();
@@ -152,88 +333,68 @@ class Program
                 for (int i = 5; i < reader.FieldsCount; i += 2)
                 {
                     if (reader[i] == "") break;
+                    Item item = items[reader[i]];
+                    int quantity = int.Parse(reader[i + 1]);
                     craft.ingredients.Add(new Handicraft.Ingredient(
-                        item: items[reader[i]],
-                        quantity: int.Parse(reader[i + 1])));
+                        item: item,
+                        quantity: quantity));
+                    if (item.type == Item.Type.Leavings)
+                    {
+                        craft.totalLeavingNeeded += quantity;
+                    }
+                    if (item.type == Item.Type.Produce)
+                    {
+                        craft.totalProduceNeeded += quantity;
+                    }
                 }
                 handicrafts.Add(craft);
             }
         }
 
+        const int kRareMaterialsPerGranaryPerWeek = (kGranaryLevel + 1) * 7;
         const int kMaterialsPerGranaryPerWeek = (kMaterialsBaseValue + kNumLandmarks) * 2 * 7;
         foreach (ExpeditionArea a in areas)
         {
+            a.quantityPerRareMaterialPerWeek = kRareMaterialsPerGranaryPerWeek;
             a.expectedQuantityPerMaterialPerWeek = kMaterialsPerGranaryPerWeek / a.resources.Count;
         }
     }
 
-    private void SolveForInventory(Dictionary<Item, int> inventory)
+    private void SolveFor(ExpeditionArea area1, ExpeditionArea area2)
     {
+        Console.WriteLine($"Solving for: {area1.terrain} and {area2.terrain}");
+
+        // Build inventory
+        Inventory inventory = new Inventory(area1, area2);
+
         // Find the craftable things
         List<Handicraft> craftables = new List<Handicraft>();
         foreach (Handicraft c in handicrafts)
         {
-            bool craftable = true;
-            foreach (Handicraft.Ingredient i in c.ingredients)
+            int quantity = 0;
+            while (inventory.CanCraft(c))
             {
-                switch (i.item.type)
-                {
-                    case Item.Type.GardeningStarter:
-                    case Item.Type.Leavings:
-                    case Item.Type.Produce:
-                        // For simplicity we assume we have infinite of those
-                        break;
-                    case Item.Type.RareMaterial:
-                    case Item.Type.Material:
-                        if (!inventory.ContainsKey(i.item) ||
-                            inventory[i.item] < i.quantity)
-                        {
-                            craftable = false;
-                            break;
-                        }
-                        break;
-                }
+                quantity++;
+                inventory.Craft(c);
             }
-            if (craftable)
+            if (quantity > 0)
             {
+                for (int i = 0; i < quantity; i++) inventory.Uncraft(c);
                 craftables.Add(c);
+                Console.WriteLine($"\tCan craft {quantity} of {c.name}");
             }
         }
-
-        Console.WriteLine($"{craftables.Count} out of {handicrafts.Count} are craftable.");
     }
 
     private void InstanceMain()
     {
         LoadData();
 
-        // Start picking granary expeditions
-        const int kRareMaterialsPerGranaryPerWeek = (kGranaryLevel + 1) * 7;
         for (int choice1 = 0; choice1 < areas.Count; choice1++)
         {
             for (int choice2 = choice1; choice2 < areas.Count; choice2++)
             {
-                ExpeditionArea area1 = areas[choice1];
-                ExpeditionArea area2 = areas[choice2];
-
-                // Build inventory
-                Dictionary<Item, int> inventory = new Dictionary<Item, int>();
-                inventory.TryAdd(area1.rareResources, 0);
-                inventory[area1.rareResources] += kRareMaterialsPerGranaryPerWeek;
-                inventory.TryAdd(area2.rareResources, 0);
-                inventory[area2.rareResources] += kRareMaterialsPerGranaryPerWeek;
-                foreach (Item i in area1.resources)
-                {
-                    inventory.TryAdd(i, 0);
-                    inventory[i] += area1.expectedQuantityPerMaterialPerWeek;
-                }
-                foreach (Item i in area2.resources)
-                {
-                    inventory.TryAdd(i, 0);
-                    inventory[i] += area2.expectedQuantityPerMaterialPerWeek;
-                }
-
-                SolveForInventory(inventory);
+                SolveFor(areas[choice1], areas[choice2]);
             }
         }
     }
