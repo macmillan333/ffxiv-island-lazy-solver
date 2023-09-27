@@ -1,5 +1,6 @@
 ﻿using NReco;
 using NReco.Csv;
+using System.Text;
 
 class Item
 {
@@ -70,6 +71,28 @@ class Handicraft
 
     public int totalLeavingNeeded;
     public int totalProduceNeeded;
+
+    public bool HasEfficiencyBonusAfter(Handicraft? prev)
+    {
+        if (prev == null) return false;
+        if (name == prev.name) return false;
+
+        // Is there a common category with the previous item?
+        // Note that category2 may be None
+        if (prev.category1 == this.category1 ||
+            prev.category1 == this.category2 ||
+            prev.category2 == this.category1)
+        {
+            return true;
+        }
+        if (prev.category2 == this.category2 &&
+            prev.category2 != Category.None)
+        {
+            return true;
+        }
+
+        return false;
+    }
 }
 
 class ExpeditionArea
@@ -192,7 +215,7 @@ class Inventory
 
 class DayPlan
 {
-    List<Handicraft> content;
+    public List<Handicraft> content;
     public int totalTime;
 
     public DayPlan()
@@ -210,6 +233,11 @@ class DayPlan
         content.Add(craft);
         totalTime += craft.time;
     }
+    public Handicraft? Last()
+    {
+        if (content.Count == 0) return null;
+        return content[^1];
+    }
     public void RemoveLast()
     {
         Handicraft last = content[content.Count - 1];
@@ -224,19 +252,7 @@ class DayPlan
         for (int i = 1; i < content.Count; i++)
         {
             int multiplier = 1;
-
-            // Is there a common category with the previous item?
-            // Note that category2 may be None
-            Handicraft prev = content[i - 1];
-            Handicraft curr = content[i];
-            if (prev.category1 == curr.category1 ||
-                prev.category1 == curr.category2 ||
-                prev.category2 == curr.category1)
-            {
-                multiplier = 2;
-            }
-            else if (prev.category2 == curr.category2 &&
-                prev.category2 != Handicraft.Category.None)
+            if (content[i].HasEfficiencyBonusAfter(content[i - 1]))
             {
                 multiplier = 2;
             }
@@ -244,6 +260,48 @@ class DayPlan
             value += multiplier * content[i].value;
         }
         return value;
+    }
+}
+
+class WeekPlan
+{
+    List<DayPlan> content;
+    
+    public WeekPlan()
+    {
+        content = new List<DayPlan>();
+        NewDay();
+    }
+
+    public DayPlan currentDay => content[^1];
+    public void NewDay()
+    {
+        content.Add(new DayPlan());
+    }
+    public void RemoveDay()
+    {
+        content.RemoveAt(content.Count - 1);
+    }
+    public int TotalValue()
+    {
+        int value = 0;
+        foreach (DayPlan day in content) { value += day.TotalValue(); }
+        return value;
+    }
+
+    public override string ToString()
+    {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < content.Count; i++)
+        {
+            sb.Append($"Day {i}: ");
+            foreach (Handicraft c in content[i].content)
+            {
+                sb.Append(c.name + ", ");
+            }
+            sb.AppendLine();
+        }
+        return sb.ToString();
     }
 }
 
@@ -371,19 +429,57 @@ class Program
         List<Handicraft> craftables = new List<Handicraft>();
         foreach (Handicraft c in handicrafts)
         {
-            int quantity = 0;
-            while (inventory.CanCraft(c))
+            if (inventory.CanCraft(c))
             {
-                quantity++;
-                inventory.Craft(c);
-            }
-            if (quantity > 0)
-            {
-                for (int i = 0; i < quantity; i++) inventory.Uncraft(c);
                 craftables.Add(c);
-                Console.WriteLine($"\tCan craft {quantity} of {c.name}");
             }
         }
+
+        // Start searching
+        WeekPlan weekPlan = new WeekPlan();
+        Action<int>? searchBody = null;
+        searchBody = (int level) =>
+        {
+            bool addedAnything = false;
+            foreach (Handicraft c in craftables)
+            {
+                if (!inventory.CanCraft(c)) continue;
+                bool addedDay = false;
+                if (!weekPlan.currentDay.CanAdd(c))
+                {
+                    addedDay = true;
+                    weekPlan.NewDay();
+                }
+                if (weekPlan.currentDay.Last() != null &&
+                    !c.HasEfficiencyBonusAfter(weekPlan.currentDay.Last()))
+                {
+                    continue;
+                }
+                weekPlan.currentDay.Add(c);
+                inventory.Craft(c);
+                addedAnything = true;
+
+                if (level < 3)
+                {
+                    Console.WriteLine($"Trying {c.name} at level {level}");
+                }
+                searchBody!(level + 1);
+
+                inventory.Uncraft(c);
+                weekPlan.currentDay.RemoveLast();
+                if (addedDay)
+                {
+                    weekPlan.RemoveDay();
+                }
+            }
+
+            if (!addedAnything)
+            {
+                // Console.WriteLine(weekPlan);
+                // Console.WriteLine("Total value: " + weekPlan.TotalValue());
+            }
+        };
+        searchBody(1);
     }
 
     private void InstanceMain()
