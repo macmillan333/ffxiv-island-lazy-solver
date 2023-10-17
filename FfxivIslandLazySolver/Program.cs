@@ -19,6 +19,11 @@ class Item
         this.name = name;
         this.type = type;
     }
+
+    public override string ToString()
+    {
+        return name;
+    }
 }
 
 class Handicraft
@@ -113,13 +118,12 @@ class ExpeditionArea
 
 class Inventory
 {
-    private Dictionary<Item, int> content;
+    private Dictionary<Item, int> content = new Dictionary<Item, int>();
     private int leavingQuantity;
     private int produceQuantity;
 
     public Inventory(ExpeditionArea area1, ExpeditionArea area2)
     {
-        content = new Dictionary<Item, int>();
         content.TryAdd(area1.rareResources, 0);
         content[area1.rareResources] += area1.quantityPerRareMaterialPerWeek;
         content.TryAdd(area2.rareResources, 0);
@@ -137,6 +141,22 @@ class Inventory
 
         leavingQuantity = Program.kTotalLeavingPerWeek;
         produceQuantity = Program.kProduceAvailableForCraftPerWeek;
+    }
+
+    private Inventory() { }
+
+    public Inventory Clone()
+    {
+        Inventory clone = new Inventory()
+        {
+            leavingQuantity = leavingQuantity,
+            produceQuantity = produceQuantity
+        };
+        foreach (KeyValuePair<Item, int> pair in content)
+        {
+            clone.content.Add(pair.Key, pair.Value);
+        }
+        return clone;
     }
 
     public bool CanCraft(Handicraft craft)
@@ -289,12 +309,21 @@ class WeekPlan
         return value;
     }
 
+    public void Add(Handicraft craft)
+    {
+        if (!content[^1].CanAdd(craft))
+        {
+            content.Add(new DayPlan());
+        }
+        content[^1].Add(craft);
+    }
+
     public override string ToString()
     {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < content.Count; i++)
         {
-            sb.Append($"Day {i}: ");
+            sb.Append($"Day {i} ({content[i].TotalValue()}): ");
             foreach (Handicraft c in content[i].content)
             {
                 sb.Append(c.name + ", ");
@@ -314,7 +343,7 @@ class Program
 
     // Parameters
     const int kGranaryLevel = 4;
-    const int kNumLandmarks = 4;
+    const int kNumLandmarks = 5;
     const int kMaterialsBaseValue = 9;  // 64.34% to be 9+, 46.84% to be 10+
     const int kCroplandPlots = 20;
     const int kPastureSlots = 20;
@@ -333,9 +362,14 @@ class Program
         * 7  // 1 drop chance per day
         * 3 / 2;  // 1 normal + 50% chance bonus drop
 
+    // Algorithm parameters
+    const int kGenerationSize = 10;
+    const int kAttemptsToAddHandicraftToInitialGen = 100;
+
     Dictionary<string, Item> items = new Dictionary<string, Item>();
     List<ExpeditionArea> areas = new List<ExpeditionArea>();
     List<Handicraft> handicrafts = new List<Handicraft>();
+    Random random = new Random();
 
     private void LoadData()
     {
@@ -435,51 +469,43 @@ class Program
             }
         }
 
-        // Start searching
-        WeekPlan weekPlan = new WeekPlan();
-        Action<int>? searchBody = null;
-        searchBody = (int level) =>
+        // Generate generation 0
+        List<WeekPlan> generation = new List<WeekPlan>();
+        for (int i = 0; i < kGenerationSize; i++)
+        {
+            generation.Add(GenerateRandomSolution(
+                inventory.Clone(), craftables));
+        }
+    }
+
+    private WeekPlan GenerateRandomSolution(Inventory inventory,
+        List<Handicraft> craftables)
+    {
+        WeekPlan plan = new WeekPlan();
+        while (true)
         {
             bool addedAnything = false;
-            foreach (Handicraft c in craftables)
+            for (int i = 0;
+                i < kAttemptsToAddHandicraftToInitialGen;
+                i++)
             {
-                if (!inventory.CanCraft(c)) continue;
-                bool addedDay = false;
-                if (!weekPlan.currentDay.CanAdd(c))
+                Handicraft handicraft = craftables[
+                    random.Next(0, craftables.Count)];
+                if (inventory.CanCraft(handicraft))
                 {
-                    addedDay = true;
-                    weekPlan.NewDay();
-                }
-                if (weekPlan.currentDay.Last() != null &&
-                    !c.HasEfficiencyBonusAfter(weekPlan.currentDay.Last()))
-                {
-                    continue;
-                }
-                weekPlan.currentDay.Add(c);
-                inventory.Craft(c);
-                addedAnything = true;
-
-                if (level < 3)
-                {
-                    Console.WriteLine($"Trying {c.name} at level {level}");
-                }
-                searchBody!(level + 1);
-
-                inventory.Uncraft(c);
-                weekPlan.currentDay.RemoveLast();
-                if (addedDay)
-                {
-                    weekPlan.RemoveDay();
+                    plan.Add(handicraft);
+                    inventory.Craft(handicraft);
+                    addedAnything = true;
+                    break;
                 }
             }
-
             if (!addedAnything)
             {
-                // Console.WriteLine(weekPlan);
-                // Console.WriteLine("Total value: " + weekPlan.TotalValue());
+                break;
             }
-        };
-        searchBody(1);
+        }
+        Console.WriteLine($"Generated plan: {plan}");
+        return plan;
     }
 
     private void InstanceMain()
