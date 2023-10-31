@@ -10,6 +10,7 @@ class Item
         RareMaterial,
         GardeningStarter,
         Produce,
+        ProduceFromStarter,
         Leavings
     }
     public string name;
@@ -24,6 +25,9 @@ class Item
     {
         return name;
     }
+
+    public static Dictionary<Item, Item> gardeningStarterToProduce
+        = new Dictionary<Item, Item>();
 }
 
 class Handicraft
@@ -130,13 +134,27 @@ class Inventory
         content[area2.rareResources] += area2.quantityPerRareMaterialPerWeek;
         foreach (Item i in area1.resources)
         {
-            content.TryAdd(i, 0);
-            content[i] += area1.expectedQuantityPerMaterialPerWeek;
+            Item itemToAdd = i;
+            int quantity = area1.expectedQuantityPerMaterialPerWeek;
+            if (i.type == Item.Type.GardeningStarter)
+            {
+                itemToAdd = Item.gardeningStarterToProduce[i];
+                quantity *= 5;
+            }
+            content.TryAdd(itemToAdd, 0);
+            content[itemToAdd] += quantity;
         }
         foreach (Item i in area2.resources)
         {
-            content.TryAdd(i, 0);
-            content[i] += area2.expectedQuantityPerMaterialPerWeek;
+            Item itemToAdd = i;
+            int quantity = area2.expectedQuantityPerMaterialPerWeek;
+            if (i.type == Item.Type.GardeningStarter)
+            {
+                itemToAdd = Item.gardeningStarterToProduce[i];
+                quantity *= 5;
+            }
+            content.TryAdd(itemToAdd, 0);
+            content[itemToAdd] += quantity;
         }
 
         leavingQuantity = Program.kTotalLeavingPerWeek;
@@ -173,6 +191,7 @@ class Inventory
                 case Item.Type.Produce:
                     // Already checked
                     break;
+                case Item.Type.ProduceFromStarter:
                 case Item.Type.RareMaterial:
                 case Item.Type.Material:
                     if (!content.ContainsKey(i.item) ||
@@ -181,6 +200,31 @@ class Inventory
                         return false;
                     }
                     break;
+            }
+        }
+        return true;
+    }
+
+    public bool CanCraft(DayPlan dayPlan)
+    {
+        Inventory clone = Clone();
+        foreach (Handicraft c in dayPlan.content)
+        {
+            if (!clone.CanCraft(c)) return false;
+            clone.Craft(c);
+        }
+        return true;
+    }
+
+    public bool CanCraft(WeekPlan weekPlan)
+    {
+        Inventory clone = Clone();
+        foreach (DayPlan day in weekPlan.content)
+        {
+            foreach (Handicraft c in day.content)
+            {
+                if (!clone.CanCraft(c)) return false;
+                clone.Craft(c);
             }
         }
         return true;
@@ -201,11 +245,20 @@ class Inventory
                 case Item.Type.Produce:
                     produceQuantity -= i.quantity;
                     break;
+                case Item.Type.ProduceFromStarter:
                 case Item.Type.RareMaterial:
                 case Item.Type.Material:
                     content[i.item] -= i.quantity;
                     break;
             }
+        }
+    }
+
+    public void Craft(DayPlan dayPlan)
+    {
+        foreach (Handicraft c in dayPlan.content)
+        {
+            Craft(c);
         }
     }
 
@@ -224,12 +277,23 @@ class Inventory
                 case Item.Type.Produce:
                     produceQuantity += i.quantity;
                     break;
+                case Item.Type.ProduceFromStarter:
                 case Item.Type.RareMaterial:
                 case Item.Type.Material:
                     content[i.item] += i.quantity;
                     break;
             }
         }
+    }
+
+    public override string ToString()
+    {
+        StringBuilder builder = new StringBuilder();
+        foreach (KeyValuePair<Item, int> pair in content)
+        {
+            builder.AppendLine(pair.Key.name + " " + pair.Value);
+        }
+        return builder.ToString();
     }
 }
 
@@ -253,16 +317,10 @@ class DayPlan
         content.Add(craft);
         totalTime += craft.time;
     }
-    public Handicraft? Last()
+
+    public bool CanChange(int index, Handicraft newCraft)
     {
-        if (content.Count == 0) return null;
-        return content[^1];
-    }
-    public void RemoveLast()
-    {
-        Handicraft last = content[content.Count - 1];
-        totalTime -= last.time;
-        content.RemoveAt(content.Count - 1);
+        return totalTime - content[index].time + newCraft.time <= 24;
     }
 
     public int TotalValue()
@@ -281,27 +339,29 @@ class DayPlan
         }
         return value;
     }
+
+    public DayPlan Clone()
+    {
+        DayPlan clone = new DayPlan();
+        foreach (Handicraft handicraft in content)
+        {
+            clone.Add(handicraft);
+        }
+        clone.totalTime = totalTime;
+        return clone;
+    }
 }
 
 class WeekPlan
 {
-    List<DayPlan> content;
+    public List<DayPlan> content;
     
     public WeekPlan()
     {
         content = new List<DayPlan>();
-        NewDay();
-    }
-
-    public DayPlan currentDay => content[^1];
-    public void NewDay()
-    {
         content.Add(new DayPlan());
     }
-    public void RemoveDay()
-    {
-        content.RemoveAt(content.Count - 1);
-    }
+
     public int TotalValue()
     {
         int value = 0;
@@ -331,6 +391,17 @@ class WeekPlan
             sb.AppendLine();
         }
         return sb.ToString();
+    }
+
+    public WeekPlan Clone()
+    {
+        WeekPlan clone = new WeekPlan();
+        clone.content.Clear();
+        foreach (DayPlan day in content)
+        {
+            clone.content.Add(day.Clone());
+        }
+        return clone;
     }
 }
 
@@ -363,8 +434,14 @@ class Program
         * 3 / 2;  // 1 normal + 50% chance bonus drop
 
     // Algorithm parameters
-    const int kGenerationSize = 10;
+    const int kInitialGenerationSize = 10000;
+    const int kNumGenerations = 100;
     const int kAttemptsToAddHandicraftToInitialGen = 100;
+    const int kNumTopPlansChosenToReproduce = 900;
+    const int kNumOtherPlansChosenToReproduce = 100;
+    const int kParentPairs = 1000;
+    const int kOffspringPerParentPair = 10;
+    const int kMaxMutationAttempts = 20;
 
     Dictionary<string, Item> items = new Dictionary<string, Item>();
     List<ExpeditionArea> areas = new List<ExpeditionArea>();
@@ -382,6 +459,16 @@ class Program
                 string name = reader[0];
                 Item.Type type = Enum.Parse<Item.Type>(reader[1]);
                 items.Add(name, new Item(name, type));
+            }
+        }
+        foreach (Item i in items.Values)
+        {
+            if (i.type == Item.Type.GardeningStarter)
+            {
+                string produceName = i.name.Substring(
+                    0, i.name.LastIndexOf(' '));
+                Item.gardeningStarterToProduce.Add(
+                    i, items[produceName]);
             }
         }
 
@@ -458,6 +545,7 @@ class Program
 
         // Build inventory
         Inventory inventory = new Inventory(area1, area2);
+        Console.WriteLine(inventory);
 
         // Find the craftable things
         List<Handicraft> craftables = new List<Handicraft>();
@@ -469,17 +557,73 @@ class Program
             }
         }
 
-        // Generate generation 0
-        List<WeekPlan> generation = new List<WeekPlan>();
-        for (int i = 0; i < kGenerationSize; i++)
+        // Generate initial gen
+        List<Tuple<WeekPlan, int>> generation =
+            new List<Tuple<WeekPlan, int>>();
+        for (int i = 0; i < kInitialGenerationSize; i++)
         {
             generation.Add(GenerateRandomSolution(
                 inventory.Clone(), craftables));
         }
+
+        for (int gen = 0; gen < kNumGenerations; gen++)
+        {
+            Tuple<WeekPlan, int> bestPlanThisGen =
+                new Tuple<WeekPlan, int>(new WeekPlan(), 0);
+
+            // Sort the current generation
+            generation.Sort((Tuple<WeekPlan, int> t1,
+                Tuple<WeekPlan, int> t2) =>
+            {
+                return t1.Item2 - t2.Item2;
+            });
+
+            // Pick the plans to reproduce
+            List<Tuple<WeekPlan, int>> parents = new List<Tuple<WeekPlan, int>>();
+            for (int i = 0; i < kNumTopPlansChosenToReproduce; i++)
+            {
+                parents.Add(CloneTuple(generation[i]));
+            }
+            for (int i = 0; i < kNumOtherPlansChosenToReproduce; i++)
+            {
+                int index = random.Next(
+                    kNumTopPlansChosenToReproduce, generation.Count);
+                parents.Add(CloneTuple(generation[index]));
+            }
+
+            // Reproduce and mutate
+            generation.Clear();
+            for (int i = 0; i < kParentPairs; i++)
+            {
+                WeekPlan parent1 = parents[random.Next(parents.Count)].Item1;
+                WeekPlan parent2 = parents[random.Next(parents.Count)].Item1;
+                for (int j = 0; j < kOffspringPerParentPair; j++)
+                {
+                    Tuple<WeekPlan, int> offspring = ReproduceAndMutate(
+                        parent1, parent2, inventory.Clone(),
+                        craftables);
+                    if (offspring.Item2 > bestPlanThisGen.Item2)
+                    {
+                        bestPlanThisGen = offspring;
+                    }
+                    generation.Add(offspring);
+                }
+            }
+
+            Console.WriteLine("Best plan of this generation: " + bestPlanThisGen.Item2);
+            Console.WriteLine(bestPlanThisGen.Item1);
+        }
     }
 
-    private WeekPlan GenerateRandomSolution(Inventory inventory,
-        List<Handicraft> craftables)
+    private static Tuple<WeekPlan, int> CloneTuple(
+        Tuple<WeekPlan, int> tuple)
+    {
+        return new Tuple<WeekPlan, int>(
+            tuple.Item1.Clone(), tuple.Item2);
+    }
+
+    private Tuple<WeekPlan, int> GenerateRandomSolution(
+        Inventory inventory, List<Handicraft> craftables)
     {
         WeekPlan plan = new WeekPlan();
         while (true)
@@ -504,8 +648,81 @@ class Program
                 break;
             }
         }
-        Console.WriteLine($"Generated plan: {plan}");
-        return plan;
+        // Console.WriteLine("Generated plan:");
+        // Console.WriteLine(plan);
+        return new Tuple<WeekPlan, int>(plan, plan.TotalValue());
+    }
+
+    private Tuple<WeekPlan, int> ReproduceAndMutate(WeekPlan p1,
+        WeekPlan p2, Inventory inventory, List<Handicraft> craftables)
+    {
+        WeekPlan offspring = new WeekPlan();
+        offspring.content.Clear();
+
+        // 1. Randomly take days from parents, disregarding inventory
+        List<DayPlan> daysFromParents = new List<DayPlan>();
+        int largerCount = Math.Max(p1.content.Count, p2.content.Count);
+        for (int i = 0; i < largerCount; i++)
+        {
+            WeekPlan parent = random.Next(2) == 0 ? p1 : p2;
+            if (parent.content.Count > i)
+            {
+                daysFromParents.Add(parent.content[i].Clone());
+            }
+        }
+        Shuffle(daysFromParents);
+
+        // 2. Add days to offspring
+        foreach (DayPlan day in daysFromParents)
+        {
+            if (inventory.CanCraft(day))
+            {
+                offspring.content.Add(day);
+                inventory.Craft(day);
+            }
+        }
+
+        // 3. Mutate
+        for (int i = 0; i < kMaxMutationAttempts; i++)
+        {
+            int dayIndex = random.Next(offspring.content.Count);
+            DayPlan day = offspring.content[dayIndex];
+
+            int itemIndex = random.Next(day.content.Count);
+            Handicraft oldCraft = day.content[itemIndex];
+            Handicraft newCraft = craftables[
+                random.Next(craftables.Count)];
+
+            if (!day.CanChange(itemIndex, newCraft)) continue;
+            inventory.Uncraft(oldCraft);
+            if (!inventory.CanCraft(newCraft))
+            {
+                inventory.Craft(oldCraft);
+                continue;
+            }
+            else
+            {
+                inventory.Craft(newCraft);
+                day.content[itemIndex] = newCraft;
+            }
+        }
+        
+        return new Tuple<WeekPlan, int>(
+            offspring, offspring.TotalValue());
+    }
+
+    // https://stackoverflow.com/questions/273313/randomize-a-listt
+    public void Shuffle<T>(IList<T> list)
+    {
+        int n = list.Count;
+        while (n > 1)
+        {
+            n--;
+            int k = random.Next(n + 1);
+            T value = list[k];
+            list[k] = list[n];
+            list[n] = value;
+        }
     }
 
     private void InstanceMain()
