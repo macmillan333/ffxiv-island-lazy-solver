@@ -1,5 +1,6 @@
 ﻿using NReco;
 using NReco.Csv;
+using System;
 using System.Text;
 
 class Item
@@ -318,12 +319,7 @@ class DayPlan
         totalTime += craft.time;
     }
 
-    public bool CanChange(int index, Handicraft newCraft)
-    {
-        return totalTime - content[index].time + newCraft.time <= 24;
-    }
-
-    public int TotalValue()
+    public static int TotalValue(List<Handicraft> content)
     {
         if (content.Count == 0) return 0;
         int value = content[0].value;
@@ -338,6 +334,68 @@ class DayPlan
             value += multiplier * content[i].value;
         }
         return value;
+    }
+
+    public int TotalValue()
+    {
+        return TotalValue(content);
+    }
+
+    public void FindBestPermutation()
+    {
+        List<Handicraft> bestPermutation = new List<Handicraft>();
+        foreach (Handicraft h in content)
+        {
+            bestPermutation.Add(h);
+        }
+        int bestValue = TotalValue();
+        bool foundBetterPermutation = false;
+
+        List<Handicraft> permutation = new List<Handicraft>();
+        HashSet<int> addedIndices = new HashSet<int>();
+        Action<int>? addFromContent = null;
+        addFromContent = (int index) =>
+        {
+            permutation.Add(content[index]);
+            addedIndices.Add(index);
+            if (permutation.Count == content.Count)
+            {
+                int value = TotalValue(permutation);
+                if (value > bestValue)
+                {
+                    bestPermutation.Clear();
+                    foreach (Handicraft h in permutation)
+                    {
+                        bestPermutation.Add(h);
+                    }
+                    bestValue = value;
+                    foundBetterPermutation = true;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < content.Count; i++)
+                {
+                    if (addedIndices.Contains(i)) continue;
+                    addFromContent!(i);
+                }
+            }
+            permutation.RemoveAt(permutation.Count - 1);
+            addedIndices.Remove(index);
+        };
+        for (int i = 0; i < content.Count; i++)
+        {
+            addFromContent(i);
+        }
+
+        if (foundBetterPermutation)
+        {
+            content.Clear();
+            foreach (Handicraft h in bestPermutation)
+            {
+                content.Add(h);
+            }
+        }
     }
 
     public DayPlan Clone()
@@ -367,6 +425,31 @@ class WeekPlan
         int value = 0;
         foreach (DayPlan day in content) { value += day.TotalValue(); }
         return value;
+    }
+
+    public Dictionary<Item, int> TotalMaterials()
+    {
+        Dictionary<Item, int> materials = new Dictionary<Item, int>();
+        foreach (DayPlan day in content)
+        {
+            foreach (Handicraft craft in day.content)
+            {
+                foreach (Handicraft.Ingredient i in craft.ingredients)
+                {
+                    materials.TryAdd(i.item, 0);
+                    materials[i.item] += i.quantity;
+                }
+            }
+        }
+        return materials;
+    }
+
+    public bool CanAdd(Handicraft craft, int maxDays)
+    {
+        if (content.Count > maxDays) return false;
+        if (content[^1].CanAdd(craft)) return true;
+        // Adding this craft will cause a new day
+        return content.Count < maxDays;
     }
 
     public void Add(Handicraft craft)
@@ -414,6 +497,7 @@ class Program
 
     // Parameters
     const int kGranaryLevel = 4;
+    const int kNumWorkshops = 4;
     const int kNumLandmarks = 5;
     const int kMaterialsBaseValue = 9;  // 64.34% to be 9+, 46.84% to be 10+
     const int kCroplandPlots = 20;
@@ -432,16 +516,17 @@ class Program
     public const int kTotalLeavingPerWeek = kPastureSlots
         * 7  // 1 drop chance per day
         * 3 / 2;  // 1 normal + 50% chance bonus drop
+    public const int kMaxDaysInWeekPlan = kNumWorkshops * 5;
 
     // Algorithm parameters
-    const int kInitialGenerationSize = 10000;
-    const int kNumGenerations = 100;
-    const int kAttemptsToAddHandicraftToInitialGen = 100;
-    const int kNumTopPlansChosenToReproduce = 900;
-    const int kNumOtherPlansChosenToReproduce = 100;
-    const int kParentPairs = 1000;
-    const int kOffspringPerParentPair = 10;
-    const int kMaxMutationAttempts = 20;
+    const int kNoBetterPlanThreshold = 100000;
+    const int kAttemptsToAddItemToPlan = 100;
+
+    // Final result
+    WeekPlan? globalBestPlan = null;
+    int globalBestValue = 0;
+    ExpeditionArea? bestPlanArea1 = null;
+    ExpeditionArea? bestPlanArea2 = null;
 
     Dictionary<string, Item> items = new Dictionary<string, Item>();
     List<ExpeditionArea> areas = new List<ExpeditionArea>();
@@ -545,6 +630,7 @@ class Program
 
         // Build inventory
         Inventory inventory = new Inventory(area1, area2);
+        Console.WriteLine("Inventory:");
         Console.WriteLine(inventory);
 
         // Find the craftable things
@@ -557,69 +643,33 @@ class Program
             }
         }
 
-        // Generate initial gen
-        List<Tuple<WeekPlan, int>> generation =
-            new List<Tuple<WeekPlan, int>>();
-        for (int i = 0; i < kInitialGenerationSize; i++)
+        WeekPlan? bestPlan = null;
+        int bestValue = 0;
+        int noBetterPlanCounter = 0;
+        while (noBetterPlanCounter < kNoBetterPlanThreshold)
         {
-            generation.Add(GenerateRandomSolution(
-                inventory.Clone(), craftables));
+            Tuple<WeekPlan, int> candidate = GenerateRandomSolution(
+                inventory.Clone(), craftables);
+            if (candidate.Item2 > bestValue)
+            {
+                bestPlan = candidate.Item1;
+                bestValue = candidate.Item2;
+                Console.WriteLine($"Found plan with value {bestValue} after {noBetterPlanCounter} attempts.");
+                bestPlan.content[0].FindBestPermutation();
+                noBetterPlanCounter = 0;
+            }
+            else
+            {
+                noBetterPlanCounter++;
+            }
         }
-
-        for (int gen = 0; gen < kNumGenerations; gen++)
+        if (bestValue > globalBestValue)
         {
-            Tuple<WeekPlan, int> bestPlanThisGen =
-                new Tuple<WeekPlan, int>(new WeekPlan(), 0);
-
-            // Sort the current generation
-            generation.Sort((Tuple<WeekPlan, int> t1,
-                Tuple<WeekPlan, int> t2) =>
-            {
-                return t1.Item2 - t2.Item2;
-            });
-
-            // Pick the plans to reproduce
-            List<Tuple<WeekPlan, int>> parents = new List<Tuple<WeekPlan, int>>();
-            for (int i = 0; i < kNumTopPlansChosenToReproduce; i++)
-            {
-                parents.Add(CloneTuple(generation[i]));
-            }
-            for (int i = 0; i < kNumOtherPlansChosenToReproduce; i++)
-            {
-                int index = random.Next(
-                    kNumTopPlansChosenToReproduce, generation.Count);
-                parents.Add(CloneTuple(generation[index]));
-            }
-
-            // Reproduce and mutate
-            generation.Clear();
-            for (int i = 0; i < kParentPairs; i++)
-            {
-                WeekPlan parent1 = parents[random.Next(parents.Count)].Item1;
-                WeekPlan parent2 = parents[random.Next(parents.Count)].Item1;
-                for (int j = 0; j < kOffspringPerParentPair; j++)
-                {
-                    Tuple<WeekPlan, int> offspring = ReproduceAndMutate(
-                        parent1, parent2, inventory.Clone(),
-                        craftables);
-                    if (offspring.Item2 > bestPlanThisGen.Item2)
-                    {
-                        bestPlanThisGen = offspring;
-                    }
-                    generation.Add(offspring);
-                }
-            }
-
-            Console.WriteLine("Best plan of this generation: " + bestPlanThisGen.Item2);
-            Console.WriteLine(bestPlanThisGen.Item1);
+            globalBestPlan = bestPlan;
+            globalBestValue = bestValue;
+            bestPlanArea1 = area1;
+            bestPlanArea2 = area2;
         }
-    }
-
-    private static Tuple<WeekPlan, int> CloneTuple(
-        Tuple<WeekPlan, int> tuple)
-    {
-        return new Tuple<WeekPlan, int>(
-            tuple.Item1.Clone(), tuple.Item2);
     }
 
     private Tuple<WeekPlan, int> GenerateRandomSolution(
@@ -630,12 +680,13 @@ class Program
         {
             bool addedAnything = false;
             for (int i = 0;
-                i < kAttemptsToAddHandicraftToInitialGen;
+                i < kAttemptsToAddItemToPlan;
                 i++)
             {
                 Handicraft handicraft = craftables[
                     random.Next(0, craftables.Count)];
-                if (inventory.CanCraft(handicraft))
+                if (inventory.CanCraft(handicraft) &&
+                    plan.CanAdd(handicraft, kMaxDaysInWeekPlan))
                 {
                     plan.Add(handicraft);
                     inventory.Craft(handicraft);
@@ -648,81 +699,13 @@ class Program
                 break;
             }
         }
+        foreach (DayPlan day in plan.content)
+        {
+            day.FindBestPermutation();
+        }
         // Console.WriteLine("Generated plan:");
         // Console.WriteLine(plan);
         return new Tuple<WeekPlan, int>(plan, plan.TotalValue());
-    }
-
-    private Tuple<WeekPlan, int> ReproduceAndMutate(WeekPlan p1,
-        WeekPlan p2, Inventory inventory, List<Handicraft> craftables)
-    {
-        WeekPlan offspring = new WeekPlan();
-        offspring.content.Clear();
-
-        // 1. Randomly take days from parents, disregarding inventory
-        List<DayPlan> daysFromParents = new List<DayPlan>();
-        int largerCount = Math.Max(p1.content.Count, p2.content.Count);
-        for (int i = 0; i < largerCount; i++)
-        {
-            WeekPlan parent = random.Next(2) == 0 ? p1 : p2;
-            if (parent.content.Count > i)
-            {
-                daysFromParents.Add(parent.content[i].Clone());
-            }
-        }
-        Shuffle(daysFromParents);
-
-        // 2. Add days to offspring
-        foreach (DayPlan day in daysFromParents)
-        {
-            if (inventory.CanCraft(day))
-            {
-                offspring.content.Add(day);
-                inventory.Craft(day);
-            }
-        }
-
-        // 3. Mutate
-        for (int i = 0; i < kMaxMutationAttempts; i++)
-        {
-            int dayIndex = random.Next(offspring.content.Count);
-            DayPlan day = offspring.content[dayIndex];
-
-            int itemIndex = random.Next(day.content.Count);
-            Handicraft oldCraft = day.content[itemIndex];
-            Handicraft newCraft = craftables[
-                random.Next(craftables.Count)];
-
-            if (!day.CanChange(itemIndex, newCraft)) continue;
-            inventory.Uncraft(oldCraft);
-            if (!inventory.CanCraft(newCraft))
-            {
-                inventory.Craft(oldCraft);
-                continue;
-            }
-            else
-            {
-                inventory.Craft(newCraft);
-                day.content[itemIndex] = newCraft;
-            }
-        }
-        
-        return new Tuple<WeekPlan, int>(
-            offspring, offspring.TotalValue());
-    }
-
-    // https://stackoverflow.com/questions/273313/randomize-a-listt
-    public void Shuffle<T>(IList<T> list)
-    {
-        int n = list.Count;
-        while (n > 1)
-        {
-            n--;
-            int k = random.Next(n + 1);
-            T value = list[k];
-            list[k] = list[n];
-            list[n] = value;
-        }
     }
 
     private void InstanceMain()
@@ -735,6 +718,20 @@ class Program
             {
                 SolveFor(areas[choice1], areas[choice2]);
             }
+        }
+
+        Console.WriteLine($"Areas for global best plan: {bestPlanArea1!.terrain}, {bestPlanArea2!.terrain}");
+        Console.WriteLine("Plan content:");
+        Console.WriteLine(globalBestPlan);
+        Console.WriteLine("Value: " + globalBestValue);
+        Inventory inventory = new Inventory(bestPlanArea1, bestPlanArea2);
+        Console.WriteLine("Inventory:");
+        Console.WriteLine(inventory);
+        Console.WriteLine("Total materials needed:");
+        Dictionary<Item, int> materials = globalBestPlan!.TotalMaterials();
+        foreach (KeyValuePair<Item, int> pair in materials)
+        {
+            Console.WriteLine(pair.Key.name + " " + pair.Value);
         }
     }
 
