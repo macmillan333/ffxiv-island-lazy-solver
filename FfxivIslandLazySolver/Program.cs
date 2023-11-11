@@ -408,6 +408,24 @@ class DayPlan
         clone.totalTime = totalTime;
         return clone;
     }
+
+    // Day plans with the same content but different order
+    // should have the same hash.
+    public override int GetHashCode()
+    {
+        List<int> nameHashes = new List<int>();
+        foreach (Handicraft h in content)
+        {
+            nameHashes.Add(h.name.GetHashCode());
+        }
+        nameHashes.Sort();
+        StringBuilder builder = new StringBuilder();
+        foreach (int hash in nameHashes)
+        {
+            builder.Append(hash);
+        }
+        return builder.ToString().GetHashCode();
+    }
 }
 
 class WeekPlan
@@ -425,6 +443,11 @@ class WeekPlan
         int value = 0;
         foreach (DayPlan day in content) { value += day.TotalValue(); }
         return value;
+    }
+
+    public int RankingScore()
+    {
+        return TotalValue() - 200 * NumUniqueDays();
     }
 
     public Dictionary<Item, int> TotalMaterials()
@@ -486,6 +509,16 @@ class WeekPlan
         }
         return clone;
     }
+
+    public int NumUniqueDays()
+    {
+        HashSet<int> dayHashes = new HashSet<int>();
+        foreach (DayPlan day in content)
+        {
+            dayHashes.Add(day.GetHashCode());
+        }
+        return dayHashes.Count;
+    }
 }
 
 class Program
@@ -524,7 +557,7 @@ class Program
 
     // Final result
     WeekPlan? globalBestPlan = null;
-    int globalBestValue = 0;
+    int globalBestScore = 0;
     ExpeditionArea? bestPlanArea1 = null;
     ExpeditionArea? bestPlanArea2 = null;
 
@@ -644,18 +677,17 @@ class Program
         }
 
         WeekPlan? bestPlan = null;
-        int bestValue = 0;
+        int bestScore = 0;
         int noBetterPlanCounter = 0;
         while (noBetterPlanCounter < kNoBetterPlanThreshold)
         {
             Tuple<WeekPlan, int> candidate = GenerateRandomSolution(
                 inventory.Clone(), craftables);
-            if (candidate.Item2 > bestValue)
+            if (candidate.Item2 > bestScore)
             {
                 bestPlan = candidate.Item1;
-                bestValue = candidate.Item2;
-                Console.WriteLine($"Found plan with value {bestValue} after {noBetterPlanCounter} attempts.");
-                bestPlan.content[0].FindBestPermutation();
+                bestScore = candidate.Item2;
+                Console.WriteLine($"Found plan with score {bestScore} after {noBetterPlanCounter} attempts.");
                 noBetterPlanCounter = 0;
             }
             else
@@ -663,10 +695,10 @@ class Program
                 noBetterPlanCounter++;
             }
         }
-        if (bestValue > globalBestValue)
+        if (bestScore > globalBestScore)
         {
             globalBestPlan = bestPlan;
-            globalBestValue = bestValue;
+            globalBestScore = bestScore;
             bestPlanArea1 = area1;
             bestPlanArea2 = area2;
         }
@@ -705,7 +737,7 @@ class Program
         }
         // Console.WriteLine("Generated plan:");
         // Console.WriteLine(plan);
-        return new Tuple<WeekPlan, int>(plan, plan.TotalValue());
+        return new Tuple<WeekPlan, int>(plan, plan.RankingScore());
     }
 
     private void InstanceMain()
@@ -723,7 +755,8 @@ class Program
         Console.WriteLine($"Areas for global best plan: {bestPlanArea1!.terrain}, {bestPlanArea2!.terrain}");
         Console.WriteLine("Plan content:");
         Console.WriteLine(globalBestPlan);
-        Console.WriteLine("Value: " + globalBestValue);
+        Console.WriteLine("Value: " + globalBestPlan!.TotalValue());
+        Console.WriteLine("Score: " + globalBestScore);
         Inventory inventory = new Inventory(bestPlanArea1, bestPlanArea2);
         Console.WriteLine("Inventory:");
         Console.WriteLine(inventory);
