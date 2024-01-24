@@ -447,7 +447,7 @@ class WeekPlan
 
     public int RankingScore()
     {
-        return TotalValue() - 200 * NumUniqueDays();
+        return TotalValue() - Program.kUniqueDayScorePenalty * NumUniqueDays();
     }
 
     public Dictionary<Item, int> TotalMaterials()
@@ -529,7 +529,7 @@ class Program
     const string kHandicraftFilename = "../../../Handicraft.csv";
 
     // Parameters
-    const int kGranaryLevel = 4;
+    const int kGranaryLevel = 5;
     const int kNumWorkshops = 4;
     const int kNumLandmarks = 5;
     const int kMaterialsBaseValue = 9;  // 64.34% to be 9+, 46.84% to be 10+
@@ -554,6 +554,7 @@ class Program
     // Algorithm parameters
     const int kNoBetterPlanThreshold = 100000;
     const int kAttemptsToAddItemToPlan = 100;
+    public const int kUniqueDayScorePenalty = 1000;
 
     // Final result
     WeekPlan? globalBestPlan = null;
@@ -677,7 +678,7 @@ class Program
         }
 
         WeekPlan? bestPlan = null;
-        int bestScore = 0;
+        int bestScore = int.MinValue;
         int noBetterPlanCounter = 0;
         while (noBetterPlanCounter < kNoBetterPlanThreshold)
         {
@@ -756,6 +757,7 @@ class Program
         Console.WriteLine("Plan content:");
         Console.WriteLine(globalBestPlan);
         Console.WriteLine("Value: " + globalBestPlan!.TotalValue());
+        Console.WriteLine("Unique days: " + globalBestPlan!.NumUniqueDays());
         Console.WriteLine("Score: " + globalBestScore);
         Inventory inventory = new Inventory(bestPlanArea1, bestPlanArea2);
         Console.WriteLine("Inventory:");

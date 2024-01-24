@@ -38,6 +38,11 @@ Island Shale,Material
 Island Marble,Material
 Island Mythril Ore,Material
 Island Spectrine,Material
+Island Durium Sand,Material
+Island Yellow Copper Ore,Material
+Island Gold Ore,Material
+Island Hawk's Eye Sand,Material
+Island Crystal Formation,Material
 Island Alyssum,RareMaterial
 Raw Island Garnet,RareMaterial
 Island Spruce Log,RareMaterial
@@ -60,6 +65,14 @@ Island Parsnip,ProduceFromStarter
 Island Radish,Produce
 Island Paprika,Produce
 Island Leek,Produce
+Island Runner Beans,Produce
+Island Beet,Produce
+Island Eggplant,Produce
+Island Zucchini,Produce
+Island Watermelon,Produce
+Island Sweet Popoto,Produce
+Island Broccoli,Produce
+Island Buffalo Beans,Produce
 Sanctuary Fleece,Leavings
 Sanctuary Claw,Leavings
 Sanctuary Fur,Leavings
